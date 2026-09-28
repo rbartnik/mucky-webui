@@ -102,6 +102,38 @@ mucky -c config.yaml
 > `F6` disconnects but keeps the tab so `F5` can reconnect it; use
 > `/disconnect` to also close the tab.
 
+## Running on a server and attaching from anywhere
+
+`mucky serve` keeps your connections open and your session logs running on
+one machine (like running the terminal client under `screen`), while clients
+on other machines attach and detach without interrupting them.
+
+1. Add a `server:` block with a long random `token` to `config.yaml` (see
+   `config.example.yaml`). The server refuses to start without one.
+2. Start it on the server, under systemd or `screen`:
+   ```bash
+   mucky serve -c config.yaml
+   ```
+   It listens on `127.0.0.1:8765` by default. Characters with
+   `autoconnect: true` connect at startup.
+3. Reach it from another machine over an SSH tunnel
+   (`ssh -L 8765:localhost:8765 yourserver`) or Tailscale.
+
+Every attached client gets the open characters, their command history and
+recent scrollback, then live output. Several clients can be attached at
+once. Closing a client, or typing `/quit` in it, only detaches that client.
+Stopping the server process closes the MUCK connections.
+
+A browser client is on the way. Until then, `mucky attach` is a plain
+line-mode client for trying it out:
+
+```bash
+mucky attach --url ws://127.0.0.1:8765/ws   # token from config, MUCKY_TOKEN, or a prompt
+```
+
+Type to send to the current character, `>Name` to switch character, and
+Ctrl+D to detach.
+
 ## Reloading config without a restart
 
 `/reload` re-reads the config file you started with and applies it live:
@@ -125,7 +157,8 @@ or adding entries elsewhere in the file won't disturb an open tab.
 The connection handling, triggers, history and slash commands live in
 `mucky/core.py` (`ClientCore`), which has no Textual dependency. The Textual
 app in `mucky/app.py` subscribes to the core's events and only handles display
-and keys. Run the tests with:
+and keys. `mucky/server.py` exposes the same core over a WebSocket; its module
+docstring describes the message protocol. Run the tests with:
 
 ```bash
 .venv/bin/pip install -e '.[test]'

@@ -63,9 +63,19 @@ class Profile:
 
 
 @dataclass
+class ServerSettings:
+    """Where ``mucky serve`` listens and the token clients must present."""
+
+    host: str = "127.0.0.1"
+    port: int = 8765
+    token: str | None = None
+
+
+@dataclass
 class Config:
     log_dir: str
     profiles: list[Profile] = field(default_factory=list)
+    server: ServerSettings = field(default_factory=ServerSettings)
     # Absolute path the config was loaded from, so the app can reload it.
     source: str | None = None
 
@@ -232,4 +242,14 @@ def load_config(path: str | Path) -> Config:
             )
             idx += 1
 
-    return Config(log_dir=log_dir, profiles=profiles, source=str(path))
+    raw_server = data.get("server") or {}
+    if not isinstance(raw_server, dict):
+        raise ValueError(f"'server' in {path} must be a mapping, got {raw_server!r}")
+    token = raw_server.get("token")
+    server = ServerSettings(
+        host=str(raw_server.get("host") or "127.0.0.1"),
+        port=int(raw_server.get("port") or 8765),
+        token=str(token) if token else None,
+    )
+
+    return Config(log_dir=log_dir, profiles=profiles, server=server, source=str(path))
