@@ -76,7 +76,7 @@ body {
 }
 .dot.connected { background: var(--good); }
 .dot.connecting, .dot.reconnecting { background: var(--warn); }
-.dot.disconnected { background: var(--bad); }
+.dot.disconnected, .dot.error { background: var(--bad); }
 
 .unread {
   min-width: 18px;
