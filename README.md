@@ -124,8 +124,17 @@ recent scrollback, then live output. Several clients can be attached at
 once. Closing a client, or typing `/quit` in it, only detaches that client.
 Stopping the server process closes the MUCK connections.
 
-A browser client is on the way. Until then, `mucky attach` is a plain
-line-mode client for trying it out:
+### In a browser
+
+With the tunnel up, open <http://localhost:8765/> and enter the token. The page
+shows each open character as a tab with live, colored output and an input line
+(Up/Down for history, Alt+1..9 or Ctrl+PageUp/PageDown to switch characters,
+**+** to open another character). It reattaches on its own if the server
+restarts or the network drops. `/quit` in the page detaches just that page.
+
+### From a terminal
+
+`mucky attach` is a plain line-mode client:
 
 ```bash
 mucky attach --url ws://127.0.0.1:8765/ws   # token from config, MUCKY_TOKEN, or a prompt
