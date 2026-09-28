@@ -21,3 +21,6 @@ mucky = "mucky.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["mucky*"]
+
+[tool.setuptools.package-data]
+mucky = ["web/*"]

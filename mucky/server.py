@@ -36,6 +36,7 @@ import json
 import logging
 import os
 from dataclasses import asdict
+from pathlib import Path
 
 from aiohttp import WSMsgType, web
 
@@ -60,6 +61,9 @@ log = logging.getLogger("mucky.server")
 
 # The token shipped in config.example.yaml; refuse to run with it.
 PLACEHOLDER_TOKEN = "change-me-to-a-long-random-string"
+
+# The browser client: index.html at "/", everything else under "/static/".
+WEB_DIR = Path(__file__).parent / "web"
 
 # How long a client has to send its hello frame.
 HELLO_TIMEOUT = 10
@@ -117,6 +121,7 @@ class MuckyServer:
         app = web.Application()
         app.router.add_get("/", self._index)
         app.router.add_get("/ws", self._websocket)
+        app.router.add_static("/static/", WEB_DIR)
         app.on_startup.append(self._on_startup)
         app.on_shutdown.append(self._on_shutdown)
         return app
@@ -129,8 +134,9 @@ class MuckyServer:
             await client.ws.close()
         await self.core.shutdown()
 
-    async def _index(self, request: web.Request) -> web.Response:
-        return web.Response(text="mucky server is running. Attach a client to /ws.\n")
+    async def _index(self, request: web.Request) -> web.FileResponse:
+        # The page holds no data; the WebSocket's token check guards everything.
+        return web.FileResponse(WEB_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
     # ----- snapshot and events ---------------------------------------------
 

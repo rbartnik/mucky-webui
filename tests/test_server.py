@@ -198,3 +198,19 @@ def test_server_block_in_config(tmp_path):
     cfg = load_config(path)
     assert (cfg.server.host, cfg.server.port, cfg.server.token) == ("0.0.0.0", 9000, "abc")
     assert load_config(write_config(tmp_path / "d.yaml", 1, tmp_path / "logs")).server.port == 8765
+
+
+def test_serves_browser_client(tmp_path):
+    async def scenario():
+        muck, server, http = await start(tmp_path)
+        page = await http.get("/")
+        assert page.status == 200
+        assert '<script type="module" src="static/app.js">' in await page.text()
+        for name in ("app.js", "ansi.js", "style.css"):
+            resp = await http.get(f"/static/{name}")
+            assert resp.status == 200, name
+        assert (await http.get("/static/../server.py")).status in (403, 404)
+        await http.close()
+        await muck.stop()
+
+    run(scenario())
