@@ -65,6 +65,7 @@ class FocusRequested:
     """The user asked to switch to a session (e.g. ``/connect`` on an open one)."""
 
     conn_id: str
+    origin: object = None
 
 
 @dataclass
@@ -104,16 +105,17 @@ class Notice:
     text: str
     severity: str = "information"
     timeout: float | None = None
+    origin: object = None
 
 
 @dataclass
 class HelpRequested:
-    pass
+    origin: object = None
 
 
 @dataclass
 class QuitRequested:
-    pass
+    origin: object = None
 
 
 Event = (
@@ -357,10 +359,17 @@ class ClientCore:
 
     # ----- input -----------------------------------------------------------
 
-    async def submit(self, conn_id: str | None, command: str) -> None:
-        """Handle a line typed by the user while ``conn_id`` is active."""
+    async def submit(
+        self, conn_id: str | None, command: str, origin: object = None
+    ) -> None:
+        """Handle a line typed by the user while ``conn_id`` is active.
+
+        ``origin`` identifies the front end that sent it. Replies meant only
+        for that user (notices, help, focus and quit requests) carry it, so a
+        front end serving several viewers can route them.
+        """
         if command.startswith("/"):
-            await self._handle_slash(conn_id, command)
+            await self._handle_slash(conn_id, command, origin)
             return
         if conn_id is None:
             return
@@ -376,20 +385,22 @@ class ClientCore:
         if command.strip() and (not history or history[-1] != command):
             history.append(command)
 
-    async def _handle_slash(self, conn_id: str | None, command: str) -> None:
+    async def _handle_slash(
+        self, conn_id: str | None, command: str, origin: object = None
+    ) -> None:
         parts = command[1:].split()
         name = parts[0].lower() if parts else ""
         arg = " ".join(parts[1:]) if len(parts) > 1 else None
         if name in ("connect", "c"):
-            self._cmd_connect(conn_id, arg)
+            self._cmd_connect(conn_id, arg, origin)
         elif name in ("disconnect", "dc"):
             if conn_id is None:
-                self._emit(Notice("No active connection to disconnect."))
+                self._emit(Notice("No active connection to disconnect.", origin=origin))
                 return
             await self.close_session(conn_id)
         elif name in ("reconnect", "rc"):
             if conn_id is None:
-                self._emit(Notice("No active connection to reconnect."))
+                self._emit(Notice("No active connection to reconnect.", origin=origin))
                 return
             await self.stop_connection(conn_id)
             self.start_connection(conn_id)
@@ -397,30 +408,34 @@ class ClientCore:
             if conn_id is not None:
                 self.clear(conn_id)
         elif name == "reload":
-            self.reload()
+            self.reload(origin)
         elif name in ("quit", "q", "exit"):
-            self._emit(QuitRequested())
+            self._emit(QuitRequested(origin))
         elif name == "help":
-            self._emit(HelpRequested())
+            self._emit(HelpRequested(origin))
         else:
-            self._emit(Notice(f"Unknown command: /{name} (try /help)"))
+            self._emit(Notice(f"Unknown command: /{name} (try /help)", origin=origin))
 
-    def _cmd_connect(self, conn_id: str | None, arg: str | None) -> None:
+    def _cmd_connect(
+        self, conn_id: str | None, arg: str | None, origin: object = None
+    ) -> None:
         if arg is None:
             if conn_id is not None:
                 self.start_connection(conn_id)
             else:
                 names = ", ".join(p.char_name for p in self.profiles)
-                self._emit(Notice(f"Usage: /connect <character>. Available: {names}"))
+                self._emit(Notice(
+                    f"Usage: /connect <character>. Available: {names}", origin=origin
+                ))
             return
         profile = self.resolve_profile(arg)
         if profile is None:
-            self._emit(Notice(f"Unknown character: {arg}"))
+            self._emit(Notice(f"Unknown character: {arg}", origin=origin))
             return
         self.connect(profile.id)
-        self._emit(FocusRequested(profile.id))
+        self._emit(FocusRequested(profile.id, origin))
 
-    def reload(self) -> None:
+    def reload(self, origin: object = None) -> None:
         """Re-read the config file and apply it without restarting.
 
         New characters become available immediately; trigger (gag/highlight)
@@ -430,12 +445,12 @@ class ClientCore:
         their old profile until closed.
         """
         if not self._config_path:
-            self._emit(Notice("No config file to reload.", "warning"))
+            self._emit(Notice("No config file to reload.", "warning", origin=origin))
             return
         try:
             config = load_config(self._config_path)
         except (FileNotFoundError, ValueError) as exc:
-            self._emit(Notice(f"Reload failed: {exc}", "error", 10))
+            self._emit(Notice(f"Reload failed: {exc}", "error", 10, origin))
             return
 
         self.config = config
@@ -458,6 +473,7 @@ class ClientCore:
             Notice(
                 f"Reloaded {self._config_path} — {len(config.profiles)} character(s).",
                 timeout=6,
+                origin=origin,
             )
         )
 

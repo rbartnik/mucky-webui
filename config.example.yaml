@@ -11,6 +11,17 @@
 # and each connection writes a file named by its start date/time.
 log_dir: ./logs
 
+# Settings for "mucky serve", which keeps your connections and logs running on
+# this machine while clients attach and detach. Keep it bound to 127.0.0.1 and
+# reach it over an SSH tunnel or Tailscale. Clients must present the token; pick
+# a long random one, e.g. the output of:
+#   python3 -c "import secrets; print(secrets.token_urlsafe(24))"
+# The MUCKY_TOKEN environment variable overrides it.
+server:
+  host: 127.0.0.1
+  port: 8765
+  token: "change-me-to-a-long-random-string"
+
 # Output triggers. They may be defined here (global: applied to every
 # character), under a server (applied to that server's characters), or under a
 # character. All matching levels are combined (global + server + character).
