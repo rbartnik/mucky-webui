@@ -1,0 +1,75 @@
+# mucky configuration
+#
+# Copy this file to "config.yaml" and edit it, or pass a path with:
+#   mucky --config /path/to/your.yaml
+#
+# Each (server, character) pair defines a connection you can open as a tab.
+# Tabs are not shown at startup: open one with "/connect <character>" (or set
+# autoconnect: true to open it automatically). "/disconnect" closes the tab.
+
+# Where session logs are written. One folder per character is created here,
+# and each connection writes a file named by its start date/time.
+log_dir: ./logs
+
+# Output triggers. They may be defined here (global: applied to every
+# character), under a server (applied to that server's characters), or under a
+# character. All matching levels are combined (global + server + character).
+#
+#   gags:       a list of regular expressions. If a received line matches any
+#               of them, the whole line is dropped from BOTH the screen and the
+#               session log.
+#   highlights: a list of entries that recolor matching text with 'color', a
+#               Rich style string such as "red", "bold yellow", "#ff8800", or
+#               "black on green". Each entry has either a single 'pattern' or a
+#               'patterns' list (multiple regexes sharing the same color).
+gags:
+  - "^\\s*<spam>"            # drop lines beginning with a spam channel tag
+highlights:
+  - pattern: "\\btells you\\b"
+    color: "bold magenta"
+  - color: "bold red"        # group: several patterns, one shared color
+    patterns:
+      - "\\bemergency\\b"
+      - "\\bhelp!\\b"
+      - "\\bSOS\\b"
+
+servers:
+  - name: ExampleMUCK
+    host: muck.example.com
+    port: 8888
+    tls: false          # set true for TLS/SSL (telnets)
+    keepalive: 60       # seconds between telnet NOP keepalives (0 = off)
+    reconnect: true     # auto-reconnect if the connection drops
+    encoding: utf-8     # text encoding (e.g. utf-8 or latin-1)
+    # Server-level triggers apply to all of this server's characters.
+    highlights:
+      - pattern: "\\bpages\\b"
+        color: "cyan"
+    characters:
+      - name: Fluffy
+        # Label shown in the tab bar (defaults to "name" if omitted).
+        display_name: "Fluffy 🐰"
+        # The login line is sent verbatim right after connecting.
+        # NOTE: stored in plain text, so protect this file accordingly.
+        login: "connect Fluffy hunter2"
+        autoconnect: true
+        # Character-level triggers apply to just this character/tab.
+        gags:
+          - "has connected\\.$"
+        highlights:
+          - pattern: "\\bFluffy\\b"
+            color: "bold yellow"
+      - name: Spot
+        login: "connect Spot s3cret"
+        autoconnect: false   # closed at startup; open with /connect Spot
+
+  - name: ExampleMUD
+    host: mud.example.org
+    port: 4000
+    tls: true
+    insecure: true     # skip TLS certificate validation (self-signed certs)
+    reconnect: false
+    characters:
+      - name: Hero
+        autoconnect: true
+        # No login line: log in manually by typing in the input box.
