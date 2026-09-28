@@ -25,7 +25,7 @@ body {
   grid-template-rows: auto 1fr auto;
   background: var(--bg);
   color: var(--fg);
-  font: 14px/1.35 var(--font);
+  font: 20px/1.35 var(--font);
   overflow: hidden;
 }
 
@@ -84,7 +84,7 @@ body {
   border-radius: 9px;
   background: var(--accent);
   color: #000;
-  font-size: 11px;
+  font-size: 0.8em;
   text-align: center;
 }
 .unread:empty { display: none; }
@@ -98,7 +98,7 @@ body {
   background: none;
   color: var(--muted);
   font: inherit;
-  font-size: 18px;
+  font-size: 1.3em;
   cursor: pointer;
 }
 #open-btn:hover { color: var(--fg); }
@@ -136,7 +136,7 @@ body {
   align-self: center;
   padding: 0 12px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 0.85em;
 }
 #link.down { color: var(--bad); }
 
@@ -227,10 +227,10 @@ body {
   background: var(--panel);
   color: var(--fg);
   padding: 20px 24px;
-  width: min(340px, calc(100vw - 32px));
+  width: min(24em, calc(100vw - 32px));
 }
 #login::backdrop { background: rgb(0 0 0 / 0.6); }
-#login h1 { margin: 0 0 14px; font-size: 18px; }
+#login h1 { margin: 0 0 14px; font-size: 1.3em; }
 #login label { display: block; margin-bottom: 4px; }
 #login input[type="password"] {
   width: 100%;
