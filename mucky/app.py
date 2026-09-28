@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import re
 from functools import partial
 
 from rich.style import Style
@@ -17,18 +15,22 @@ from textual.css.query import NoMatches
 from textual.message import Message
 from textual.widgets import Header, Input, Static, TabbedContent, TabPane
 
-from .config import Config, load_config
-from .connection import Connection
-from .session_log import SessionLog
-
-# How long to wait for more data before flushing a partial line (e.g. a prompt
-# with no trailing newline) to the output pane.
-_PARTIAL_FLUSH_DELAY = 0.08
-
-# Matches http(s) URLs in output. Trailing sentence punctuation is trimmed
-# separately so it isn't swept into the link.
-_URL_RE = re.compile(r"https?://[^\s\x00-\x1f<>\"'`]+", re.IGNORECASE)
-_URL_TRAILING = ".,;:!?)]}>\"'"
+from .config import Config, Profile
+from .core import (
+    Cleared,
+    ClientCore,
+    ConfigReloaded,
+    Event,
+    FocusRequested,
+    HelpRequested,
+    Line,
+    LinesAdded,
+    Notice,
+    QuitRequested,
+    SessionClosed,
+    SessionOpened,
+    StateChanged,
+)
 
 # Human-readable label and color for each connection state.
 _STATE_DISPLAY = {
@@ -138,30 +140,11 @@ class CommandInput(Input):
             self._esc_pending = True
 
 
-class OutputMessage(Message):
-    """Decoded server text for a given connection."""
+class CoreMessage(Message):
+    """Carries a ``ClientCore`` event onto Textual's message queue."""
 
-    def __init__(self, conn_id: str, text: str) -> None:
-        self.conn_id = conn_id
-        self.text = text
-        super().__init__()
-
-
-class StatusMessage(Message):
-    """A lifecycle/status notice for a given connection."""
-
-    def __init__(self, conn_id: str, text: str) -> None:
-        self.conn_id = conn_id
-        self.text = text
-        super().__init__()
-
-
-class StateMessage(Message):
-    """A connection-state change for a given connection."""
-
-    def __init__(self, conn_id: str, state: str) -> None:
-        self.conn_id = conn_id
-        self.state = state
+    def __init__(self, event: Event) -> None:
+        self.event = event
         super().__init__()
 
 
@@ -243,20 +226,15 @@ class MuckyApp(App):
 
     def __init__(self, config: Config) -> None:
         super().__init__()
-        self.config = config
-        self._config_path = config.source
-        self.profiles = config.profiles
-        self._by_id = {p.id: p for p in self.profiles}
-        self._conns: dict[str, Connection] = {}
-        self._tasks: dict[str, asyncio.Task] = {}
-        self._logs: dict[str, SessionLog] = {}
-        self._linebuf: dict[str, str] = {}
-        self._flush_timers: dict[str, object] = {}
-        self._states: dict[str, str] = {p.id: "idle" for p in self.profiles}
-        self._history: dict[str, list[str]] = {p.id: [] for p in self.profiles}
+        self.core = ClientCore(config)
+        # Per-viewer state; everything else lives in the core.
         self._history_idx: dict[str, int] = {}
         self._history_draft: dict[str, str] = {}
-        self._unread: dict[str, int] = {p.id: 0 for p in self.profiles}
+        self._unread: dict[str, int] = {}
+
+    @property
+    def profiles(self) -> list[Profile]:
+        return self.core.profiles
 
     # ----- layout ---------------------------------------------------------
 
@@ -274,101 +252,96 @@ class MuckyApp(App):
 
     async def on_mount(self) -> None:
         self.title = "mucky"
-        for p in self.profiles:
-            self._linebuf[p.id] = ""
+        self.core.subscribe(lambda event: self.post_message(CoreMessage(event)))
         self._refresh_statusbar()
         self.query_one("#input", Input).focus()
-        for p in self.profiles:
-            if p.autoconnect:
-                await self._connect(p.id)
+        await self.core.start()
 
-    # ----- connection management -----------------------------------------
+    # ----- tabs -----------------------------------------------------------
 
     def _open_ids(self) -> list[str]:
         """Connection ids of currently open tabs, in tab order."""
         tabs = self.query_one("#tabs", TabbedContent)
         return [pane.id for pane in tabs.query(TabPane) if pane.id]
 
-    async def _open_tab(self, conn_id: str) -> None:
-        """Open (and activate) the tab for a connection, creating it if needed."""
-        tabs = self.query_one("#tabs", TabbedContent)
-        profile = self._by_id[conn_id]
-        if conn_id not in self._open_ids():
-            self._unread[conn_id] = 0
-            await tabs.add_pane(
-                TabPane(profile.tab_name, OutputLog(id=f"log-{conn_id}"), id=conn_id)
-            )
-        tabs.active = conn_id
+    def _activate(self, conn_id: str) -> None:
+        self.query_one("#tabs", TabbedContent).active = conn_id
         self.query_one("#input", Input).focus()
 
     async def _connect(self, conn_id: str) -> None:
-        """Open the tab for a profile and start its connection."""
-        await self._open_tab(conn_id)
-        self._start_connection(conn_id)
+        """Show the tab for a profile and start its connection."""
+        if conn_id in self._open_ids():
+            self._activate(conn_id)
+        self.core.connect(conn_id)
+
+    async def _add_tab(self, conn_id: str) -> None:
+        """Create (and activate) the tab for a newly opened session."""
+        profile = self.core.profile(conn_id)
+        if profile is None:
+            return
+        if conn_id not in self._open_ids():
+            self._unread[conn_id] = 0
+            tabs = self.query_one("#tabs", TabbedContent)
+            await tabs.add_pane(
+                TabPane(profile.tab_name, OutputLog(id=f"log-{conn_id}"), id=conn_id)
+            )
+        self._activate(conn_id)
 
     async def _close_tab(self, conn_id: str) -> None:
-        """Remove a connection's tab and cycle to the previous open tab."""
+        """Remove a session's tab and cycle to the previous open tab."""
         tabs = self.query_one("#tabs", TabbedContent)
         ids = self._open_ids()
         if conn_id not in ids:
             return
         idx = ids.index(conn_id)
-        timer = self._flush_timers.pop(conn_id, None)
-        if timer is not None:
-            timer.stop()
-        self._linebuf[conn_id] = ""
         self._unread[conn_id] = 0
-        self._states[conn_id] = "idle"
-        log = self._logs.pop(conn_id, None)
-        if log is not None:
-            log.close()
         await tabs.remove_pane(conn_id)
         remaining = [i for i in ids if i != conn_id]
         if remaining:
-            tabs.active = remaining[(idx - 1) % len(remaining)]
-            self.query_one("#input", Input).focus()
+            self._activate(remaining[(idx - 1) % len(remaining)])
         else:
             self._refresh_statusbar()
 
-    def _start_connection(self, conn_id: str) -> None:
-        if conn_id in self._conns and self._conns[conn_id].connected:
-            return
-        profile = self._by_id.get(conn_id)
-        if profile is None:
-            return
+    # ----- core events ----------------------------------------------------
 
-        self._logs[conn_id] = SessionLog(self.config.log_dir, profile.char_name)
-        self._status(conn_id, f"--- session log: {self._logs[conn_id].path} ---")
-
-        conn = Connection(
-            profile,
-            on_text=lambda t, cid=conn_id: self.post_message(OutputMessage(cid, t)),
-            on_status=lambda t, cid=conn_id: self.post_message(StatusMessage(cid, t)),
-            on_state=lambda s, cid=conn_id: self.post_message(StateMessage(cid, s)),
-        )
-        self._conns[conn_id] = conn
-        self._tasks[conn_id] = asyncio.create_task(conn.run())
-
-    async def _stop_connection(self, conn_id: str) -> None:
-        conn = self._conns.get(conn_id)
-        if conn is not None:
-            await conn.close()
-        task = self._tasks.pop(conn_id, None)
-        if task is not None:
-            task.cancel()
-
-    # ----- message handlers ----------------------------------------------
-
-    def on_output_message(self, message: OutputMessage) -> None:
-        self._append_text(message.conn_id, message.text)
-
-    def on_status_message(self, message: StatusMessage) -> None:
-        self._status(message.conn_id, message.text)
-
-    def on_state_message(self, message: StateMessage) -> None:
-        self._states[message.conn_id] = message.state
-        if message.conn_id == self._active_conn_id():
+    async def on_core_message(self, message: CoreMessage) -> None:
+        event = message.event
+        if isinstance(event, LinesAdded):
+            self._show_lines(event.conn_id, event.lines)
+        elif isinstance(event, StateChanged):
+            if event.conn_id == self._active_conn_id():
+                self._refresh_statusbar()
+        elif isinstance(event, SessionOpened):
+            await self._add_tab(event.conn_id)
+        elif isinstance(event, FocusRequested):
+            if event.conn_id in self._open_ids():
+                self._activate(event.conn_id)
+        elif isinstance(event, SessionClosed):
+            await self._close_tab(event.conn_id)
+        elif isinstance(event, Cleared):
+            widget = self._rich_log(event.conn_id)
+            if widget is not None:
+                widget.clear()
+        elif isinstance(event, ConfigReloaded):
+            # Tab names may have changed.
+            for cid in self._open_ids():
+                self._update_tab_label(cid)
             self._refresh_statusbar()
+        elif isinstance(event, Notice):
+            kwargs = {} if event.timeout is None else {"timeout": event.timeout}
+            self.notify(event.text, severity=event.severity, **kwargs)
+        elif isinstance(event, HelpRequested):
+            self.notify(
+                "Commands: /connect <character> /disconnect /reconnect "
+                "/reload /clear /quit  | Keys: F2 character palette, "
+                "Esc then Up/Down history, F5/F6 connect/disconnect, "
+                "Ctrl+Left/Right (or Esc then Left/Right) tabs, Ctrl+Q quit  | "
+                "Mouse: drag to select, "
+                "Cmd/Ctrl+C to copy, click links to open",
+                timeout=12,
+            )
+        elif isinstance(event, QuitRequested):
+            await self.action_quit()
 
     def on_tabbed_content_tab_activated(
         self, event: TabbedContent.TabActivated
@@ -392,14 +365,11 @@ class MuckyApp(App):
     def _refresh_statusbar(self) -> None:
         bar = self.query_one("#statusbar", Static)
         conn_id = self._active_conn_id()
-        if conn_id is None:
-            bar.update("")
-            return
-        profile = self._by_id.get(conn_id)
+        profile = self.core.profile(conn_id) if conn_id else None
         if profile is None:
             bar.update("")
             return
-        state = self._states.get(conn_id, "idle")
+        state = self.core.state(conn_id)
         label, color = _STATE_DISPLAY.get(state, (state, "white"))
         scheme = "telnets" if profile.tls else "telnet"
         text = Text.assemble(
@@ -428,120 +398,25 @@ class MuckyApp(App):
             return False
         return widget.is_vertical_scroll_end
 
-    def _render_line(self, conn_id: str, line: str) -> Text | None:
-        """Build a renderable line, or ``None`` if a gag drops it.
-
-        Applies ANSI colors, clickable http(s) links, and highlight recoloring.
-        Gag matching runs against the visible (ANSI-stripped) text.
-        """
-        text = Text.from_ansi(line.rstrip("\r"))
-        profile = self._by_id[conn_id]
-        plain = text.plain
-        if any(rx.search(plain) for rx in profile.gags):
-            return None
-        self._linkify(text)
-        for hl in profile.highlights:
-            for match in hl.pattern.finditer(plain):
-                if match.start() != match.end():
-                    text.stylize(hl.style, match.start(), match.end())
-        return text
-
-    def _emit_line(self, conn_id: str, widget: OutputLog, line: str, scroll_end: bool) -> None:
-        """Render, display, and log one output line (unless gagged)."""
-        text = self._render_line(conn_id, line)
-        if text is None:
-            return
-        widget.write(text, scroll_end=scroll_end)
-        self._mark_unread(conn_id)
-        log = self._logs.get(conn_id)
-        if log is not None:
-            log.write(text.plain + "\n")
-
-    def _linkify(self, text: Text) -> None:
-        """Style any http(s) URLs as clickable links that open the browser."""
-        plain = text.plain
-        for match in _URL_RE.finditer(plain):
-            start, end = match.start(), match.end()
-            url = match.group()
-            while url and url[-1] in _URL_TRAILING:
-                ch = url[-1]
-                # Keep a closing bracket that pairs with one inside the URL
-                # (e.g. Wikipedia links), strip it only when unbalanced.
-                pair = {")": "(", "]": "[", "}": "{"}.get(ch)
-                if pair and url.count(pair) >= url.count(ch):
-                    break
-                url = url[:-1]
-                end -= 1
-            if not url:
-                continue
-            text.stylize("underline #6cb6ff", start, end)
-            text.stylize(
-                Style.from_meta({"@click": f"app.open_link({url!r})"}), start, end
-            )
-
-    def _append_text(self, conn_id: str, text: str) -> None:
-        """Buffer incoming text and write complete lines, preserving ANSI color."""
+    def _show_lines(self, conn_id: str, lines: list[Line]) -> None:
         widget = self._rich_log(conn_id)
         if widget is None:
             return
-        buffer = self._linebuf.get(conn_id, "") + text
-        *lines, remainder = buffer.split("\n")
         scroll_end = self._autoscroll(widget)
         for line in lines:
-            self._emit_line(conn_id, widget, line, scroll_end)
-        self._linebuf[conn_id] = remainder
-        self._schedule_partial_flush(conn_id)
-
-    def _schedule_partial_flush(self, conn_id: str) -> None:
-        timer = self._flush_timers.get(conn_id)
-        if timer is not None:
-            timer.stop()
-        self._flush_timers[conn_id] = self.set_timer(
-            _PARTIAL_FLUSH_DELAY, lambda cid=conn_id: self._flush_partial(cid)
-        )
-
-    def _flush_partial(self, conn_id: str) -> None:
-        remainder = self._linebuf.get(conn_id, "")
-        if remainder:
-            widget = self._rich_log(conn_id)
-            if widget is None:
-                self._linebuf[conn_id] = ""
-                return
-            self._emit_line(
-                conn_id, widget, remainder, self._autoscroll(widget)
-            )
-            self._linebuf[conn_id] = ""
-
-    def _status(self, conn_id: str, text: str) -> None:
-        # Flush any pending partial line so status notices stay in order.
-        self._flush_partial(conn_id)
-        widget = self._rich_log(conn_id)
-        if widget is None:
-            return
-        widget.write(
-            Text(text, style="italic yellow"), scroll_end=self._autoscroll(widget)
-        )
-        self._mark_unread(conn_id)
+            widget.write(to_rich_text(line), scroll_end=scroll_end)
+            self._mark_unread(conn_id)
 
     # ----- input handling -------------------------------------------------
 
     def on_input_changed(self, event: Input.Changed) -> None:
         self.query_one("#counter", Static).update(str(len(event.value)))
 
-    # ----- command history ------------------------------------------------
-
-    def _record_history(self, conn_id: str, command: str) -> None:
-        history = self._history[conn_id]
-        if command.strip() and (not history or history[-1] != command):
-            history.append(command)
-        self._history_idx.pop(conn_id, None)
-        self._history_draft.pop(conn_id, None)
-
     def on_command_input_history(self, message: CommandInput.History) -> None:
         conn_id = self._active_conn_id()
         if conn_id is None:
             return
-        history = self._history[conn_id]
+        history = self.core.history(conn_id)
         if not history:
             return
         input_widget = self.query_one("#input", CommandInput)
@@ -572,129 +447,11 @@ class MuckyApp(App):
         input_widget = self.query_one("#input", Input)
         input_widget.value = ""
         self.query_one("#counter", Static).update("0")
-
-        if command.startswith("/"):
-            await self._handle_slash(command)
-            return
-
         conn_id = self._active_conn_id()
-        if conn_id is None:
-            return
-
-        self._record_history(conn_id, command)
-
-        conn = self._conns.get(conn_id)
-        if conn is not None:
-            await conn.send(command)
-        else:
-            self._status(conn_id, "Not connected. Press F5 or use /connect.")
-
-    def _resolve_profile(self, name: str):
-        """Find a profile by character name, tab name, or connection id."""
-        low = name.lower()
-        for p in self.profiles:
-            if low in (p.char_name.lower(), p.tab_name.lower()) or name == p.id:
-                return p
-        return None
-
-    async def _handle_slash(self, command: str) -> None:
-        parts = command[1:].split()
-        name = parts[0].lower() if parts else ""
-        arg = " ".join(parts[1:]) if len(parts) > 1 else None
-        conn_id = self._active_conn_id()
-        if name in ("connect", "c"):
-            await self._cmd_connect(arg)
-        elif name in ("disconnect", "dc"):
-            if conn_id is None:
-                self.notify("No active connection to disconnect.")
-                return
-            await self._stop_connection(conn_id)
-            await self._close_tab(conn_id)
-        elif name in ("reconnect", "rc"):
-            if conn_id is None:
-                self.notify("No active connection to reconnect.")
-                return
-            await self._stop_connection(conn_id)
-            self._start_connection(conn_id)
-        elif name == "clear":
-            widget = self._rich_log(conn_id) if conn_id else None
-            if widget is not None:
-                widget.clear()
-        elif name == "reload":
-            self._cmd_reload()
-        elif name in ("quit", "q", "exit"):
-            await self.action_quit()
-        elif name == "help":
-            self.notify(
-                "Commands: /connect <character> /disconnect /reconnect "
-                "/reload /clear /quit  | Keys: F2 character palette, "
-                "Esc then Up/Down history, F5/F6 connect/disconnect, "
-                "Ctrl+Left/Right (or Esc then Left/Right) tabs, Ctrl+Q quit  | "
-                "Mouse: drag to select, "
-                "Cmd/Ctrl+C to copy, click links to open",
-                timeout=12,
-            )
-        else:
-            self.notify(f"Unknown command: /{name} (try /help)")
-
-    def _cmd_reload(self) -> None:
-        """Re-read the config file and apply it without restarting.
-
-        New characters become available immediately; trigger (gag/highlight)
-        and tab-name changes apply to open tabs at once. Connection settings
-        (host/port/tls/...) take effect on the next (re)connect. Open tabs whose
-        character was removed from the config keep working with their old
-        profile until closed.
-        """
-        if not self._config_path:
-            self.notify("No config file to reload.", severity="warning")
-            return
-        try:
-            config = load_config(self._config_path)
-        except (FileNotFoundError, ValueError) as exc:
-            self.notify(f"Reload failed: {exc}", severity="error", timeout=10)
-            return
-
-        self.config = config
-        self.profiles = config.profiles
-        new_by_id = {p.id: p for p in config.profiles}
-        # Preserve profiles for open tabs that vanished, so rendering/labels
-        # keep working until those tabs are closed.
-        for cid in self._open_ids():
-            if cid not in new_by_id and cid in self._by_id:
-                new_by_id[cid] = self._by_id[cid]
-        self._by_id = new_by_id
-
-        for p in config.profiles:
-            self._states.setdefault(p.id, "idle")
-            self._history.setdefault(p.id, [])
-            self._linebuf.setdefault(p.id, "")
-            self._unread.setdefault(p.id, 0)
-
-        # Refresh open tab labels (tab_name may have changed) and the statusbar.
-        for cid in self._open_ids():
-            self._update_tab_label(cid)
-        self._refresh_statusbar()
-
-        self.notify(
-            f"Reloaded {self._config_path} — {len(config.profiles)} character(s).",
-            timeout=6,
-        )
-
-    async def _cmd_connect(self, arg: str | None) -> None:
-        if arg is None:
-            conn_id = self._active_conn_id()
-            if conn_id is not None:
-                self._start_connection(conn_id)
-            else:
-                names = ", ".join(p.char_name for p in self.profiles)
-                self.notify(f"Usage: /connect <character>. Available: {names}")
-            return
-        profile = self._resolve_profile(arg)
-        if profile is None:
-            self.notify(f"Unknown character: {arg}")
-            return
-        await self._connect(profile.id)
+        if conn_id is not None and not command.startswith("/"):
+            self._history_idx.pop(conn_id, None)
+            self._history_draft.pop(conn_id, None)
+        await self.core.submit(conn_id, command)
 
     # ----- actions / tab navigation --------------------------------------
 
@@ -711,9 +468,11 @@ class MuckyApp(App):
 
     def _update_tab_label(self, conn_id: str) -> None:
         """Show the unread count as a ``[n]`` suffix on the tab (or none)."""
-        name = self._by_id[conn_id].tab_name
+        profile = self.core.profile(conn_id)
+        if profile is None:
+            return
         count = self._unread.get(conn_id, 0)
-        label = f"{name} [{count}]" if count else name
+        label = f"{profile.tab_name} [{count}]" if count else profile.tab_name
         try:
             tab = self.query_one("#tabs", TabbedContent).get_tab(conn_id)
         except Exception:
@@ -729,8 +488,7 @@ class MuckyApp(App):
             i = ids.index(tabs.active)
         except ValueError:
             i = 0
-        tabs.active = ids[(i + step) % len(ids)]
-        self.query_one("#input", Input).focus()
+        self._activate(ids[(i + step) % len(ids)])
 
     def action_next_tab(self) -> None:
         self._cycle_tab(1)
@@ -758,7 +516,7 @@ class MuckyApp(App):
     def action_connect(self) -> None:
         conn_id = self._active_conn_id()
         if conn_id is not None:
-            self._start_connection(conn_id)
+            self.core.start_connection(conn_id)
         else:
             self.notify("Use /connect <character> to open a connection.")
 
@@ -767,13 +525,24 @@ class MuckyApp(App):
         # use /disconnect to also close the tab.
         conn_id = self._active_conn_id()
         if conn_id is not None:
-            await self._stop_connection(conn_id)
+            await self.core.stop_connection(conn_id)
 
     async def action_quit(self) -> None:
-        for conn_id in list(self._conns):
-            await self._stop_connection(conn_id)
+        await self.core.shutdown()
         self.exit()
 
-    def on_unmount(self) -> None:
-        for log in self._logs.values():
-            log.close()
+    async def on_unmount(self) -> None:
+        await self.core.shutdown()
+
+
+def to_rich_text(line: Line) -> Text:
+    """Render a core ``Line`` as Rich ``Text`` with colors, links and highlights."""
+    if line.status:
+        return Text(line.plain, style="italic yellow")
+    text = Text.from_ansi(line.ansi)
+    for start, end, url in line.links:
+        text.stylize("underline #6cb6ff", start, end)
+        text.stylize(Style.from_meta({"@click": f"app.open_link({url!r})"}), start, end)
+    for start, end, style in line.highlights:
+        text.stylize(style, start, end)
+    return text
