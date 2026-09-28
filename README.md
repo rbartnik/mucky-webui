@@ -120,6 +120,18 @@ mucky -c config.yaml
 Connection tabs are identified by `server name + character name`, so reordering
 or adding entries elsewhere in the file won't disturb an open tab.
 
+## Development
+
+The connection handling, triggers, history and slash commands live in
+`mucky/core.py` (`ClientCore`), which has no Textual dependency. The Textual
+app in `mucky/app.py` subscribes to the core's events and only handles display
+and keys. Run the tests with:
+
+```bash
+.venv/bin/pip install -e '.[test]'
+.venv/bin/python -m pytest
+```
+
 ## Deploying to another machine
 
 `mucky` is a standard pip-installable package, so the install steps above work
