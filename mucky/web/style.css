@@ -170,7 +170,9 @@ body {
 }
 .line .text { flex: 1; min-width: 0; }
 .line.status { color: var(--status); font-style: italic; }
-.line a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+/* Links always show in dodger blue, even over the MUCK's own ANSI colour
+   (set inline on the node, hence !important). */
+.line a, .line a:visited { color: #1e90ff !important; text-decoration: underline; text-underline-offset: 2px; }
 .line a:hover { color: var(--accent); }
 
 .help {
