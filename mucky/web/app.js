@@ -19,6 +19,7 @@ const tabsEl = $("tabs");
 const outputsEl = $("outputs");
 const emptyEl = $("empty");
 const inputEl = $("input");
+const counterEl = $("counter");
 const linkEl = $("link");
 const openBtn = $("open-btn");
 const openMenu = $("open-menu");
@@ -231,7 +232,7 @@ function activate(id) {
     if (on) {
       sess.unread = 0;
       inputEl.value = sess.draft;
-      sizeInput();
+      inputChanged();
     }
     drawTab(sess);
   }
@@ -355,9 +356,12 @@ openMenu.addEventListener("keydown", (ev) => {
 
 // ----- input line ------------------------------------------------------------
 
-function sizeInput() {
+// Called whenever the input's text changes, typed or set from code: grow the
+// box to fit and refresh the character count, as the Textual app did.
+function inputChanged() {
   inputEl.style.height = "auto";
   inputEl.style.height = `${inputEl.scrollHeight}px`;
+  counterEl.textContent = inputEl.value.length;
 }
 
 function submit() {
@@ -375,7 +379,7 @@ function submit() {
   }
   inputEl.value = "";
   if (sess) { sess.histPos = sess.history.length; sess.draft = ""; sess.follow = true; scrollToBottom(sess); }
-  sizeInput();
+  inputChanged();
 }
 
 function recall(step) {
@@ -384,7 +388,7 @@ function recall(step) {
   if (sess.histPos === sess.history.length) sess.draft = inputEl.value;
   sess.histPos = Math.max(0, Math.min(sess.history.length, sess.histPos + step));
   inputEl.value = sess.histPos === sess.history.length ? sess.draft : sess.history[sess.histPos];
-  sizeInput();
+  inputChanged();
   inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
 }
 
@@ -395,7 +399,7 @@ function cycle(step) {
   activate(ids[(i + step + ids.length) % ids.length]);
 }
 
-inputEl.addEventListener("input", sizeInput);
+inputEl.addEventListener("input", inputChanged);
 
 inputEl.addEventListener("keydown", (ev) => {
   if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) {
