@@ -203,13 +203,16 @@ body {
 /* ----- input ----- */
 
 #input-form {
+  display: flex;
+  align-items: center;
   border-top: 1px solid var(--border);
   background: var(--panel);
 }
 
 #input {
   display: block;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   max-height: 30vh;
   padding: 8px 10px;
   border: 0;
@@ -218,6 +221,15 @@ body {
   font: inherit;
   resize: none;
   outline: none;
+}
+
+#counter {
+  flex: none;
+  min-width: 4ch;
+  padding: 0 10px;
+  text-align: right;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ----- login ----- */
