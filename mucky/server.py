@@ -23,7 +23,8 @@ server -> client
     {"type": "error", "text": ...}                      then the socket closes
 
 A line is {"ansi", "plain", "highlights": [[start, end, style]],
-"links": [[start, end, url]], "status"}. Notices, help and focus replies go
+"links": [[start, end, url]], "status", "ts"}, where ts is when the core
+received the line, in Unix seconds. Notices, help and focus replies go
 only to the client whose input caused them. ``/quit`` from a client detaches
 that client; it does not stop the server.
 """

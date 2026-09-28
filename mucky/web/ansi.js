@@ -191,13 +191,32 @@ function styleNode(text, style) {
   return node;
 }
 
-// Build the DOM for one core Line: {ansi, plain, highlights, links, status}.
+const pad2 = (n) => String(n).padStart(2, "0");
+
+// The left gutter: when the core received the line, as local HH:mm, with the
+// full date and time on hover. Blank if the server didn't send a time.
+function stampNode(ts) {
+  const span = document.createElement("span");
+  span.className = "ts";
+  if (typeof ts === "number") {
+    const d = new Date(ts * 1000);
+    span.textContent = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    span.title = d.toLocaleString();
+  }
+  return span;
+}
+
+// Build the DOM for one core Line: {ansi, plain, highlights, links, status, ts}.
 export function renderLine(line) {
   const div = document.createElement("div");
   div.className = "line";
+  div.appendChild(stampNode(line.ts));
+  const body = document.createElement("span");
+  body.className = "text";
+  div.appendChild(body);
   if (line.status) {
     div.classList.add("status");
-    div.textContent = line.plain;
+    body.textContent = line.plain;
     return div;
   }
   let runs = parseAnsi(line.ansi);
@@ -207,7 +226,7 @@ export function renderLine(line) {
   for (const [start, end, style] of line.highlights || []) {
     runs = overlay(runs, start, end, parseRichStyle(style));
   }
-  for (const [text, style] of runs) div.appendChild(styleNode(text, style));
-  if (!div.firstChild) div.appendChild(document.createTextNode("​"));
+  for (const [text, style] of runs) body.appendChild(styleNode(text, style));
+  if (!body.firstChild) body.appendChild(document.createTextNode("​"));
   return div;
 }
