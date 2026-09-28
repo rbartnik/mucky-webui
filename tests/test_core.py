@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import subprocess
 import sys
+import time
 
 from mucky.config import load_config
 from mucky.core import ClientCore, LinesAdded, SessionClosed, find_links
@@ -37,6 +38,7 @@ def test_lines_triggers_links_and_partial_flush(tmp_path):
         await core.start()
         await wait_for(lambda: server.received == ["connect Fluffy pw"])
 
+        before = time.time()
         await server.send("Hi \x1b[1;32mFluffy\x1b[0m\r\nGAGME x\nhttps://e.com/a_(b) and (https://e.com/c).\nprompt> ")
         await wait_for(lambda: "prompt> " in output(core))
         assert output(core) == ["Hi Fluffy", "https://e.com/a_(b) and (https://e.com/c).", "prompt> "]
@@ -44,6 +46,8 @@ def test_lines_triggers_links_and_partial_flush(tmp_path):
         hi = next(l for l in core.scrollback(FLUFFY) if l.plain == "Hi Fluffy")
         assert hi.ansi == "Hi \x1b[1;32mFluffy\x1b[0m"
         assert hi.highlights == [(3, 9, "bold red")]
+        # Each line is stamped with when it arrived.
+        assert before <= hi.ts <= time.time()
         links = next(l for l in core.scrollback(FLUFFY) if l.plain.startswith("https")).links
         assert [url for _, _, url in links] == ["https://e.com/a_(b)", "https://e.com/c"]
 

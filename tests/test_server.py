@@ -95,6 +95,7 @@ def test_detach_keeps_connection_and_reattach_replays(tmp_path):
 
         await muck.send("You see a \x1b[33mlamp\x1b[0m.\n")
         await wait_for(lambda: "You see a lamp." in first.plain())
+        live_lamp = next(l for m in first.of("lines") for l in m["lines"] if l["plain"] == "You see a lamp.")
         await first.send("look lamp")
         await wait_for(lambda: muck.received[-1:] == ["look lamp"])
 
@@ -113,6 +114,8 @@ def test_detach_keeps_connection_and_reattach_replays(tmp_path):
         assert "You see a lamp." in plain and "While you were away." in plain
         lamp = next(l for l in session["scrollback"] if l["plain"] == "You see a lamp.")
         assert "\x1b[33m" in lamp["ansi"]
+        # Replayed lines keep the time the core received them.
+        assert lamp["ts"] == live_lamp["ts"]
         assert session["history"] == ["look lamp"]
         await second.ws.close()
         await http.close()

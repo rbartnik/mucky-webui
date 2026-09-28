@@ -158,7 +158,17 @@ body {
 }
 .output[hidden] { display: none; }
 
-.line { min-height: 1.35em; }
+.line { min-height: 1.35em; display: flex; }
+/* Arrival-time gutter; wrapped lines stay indented past it, and it is left out
+   of copied text. */
+.line .ts {
+  flex: none;
+  width: 6ch;
+  color: var(--muted);
+  font-style: normal;
+  user-select: none;
+}
+.line .text { flex: 1; min-width: 0; }
 .line.status { color: var(--status); font-style: italic; }
 .line a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .line a:hover { color: var(--accent); }
